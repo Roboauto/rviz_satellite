@@ -1,3 +1,17 @@
+# Building rviz_satellite with MQTT support
+
+Properly installed conan is expected, along with necessary remotes added. Run these commands in some nice folder, where you have a write access (eg. home folder):
+
+```
+mkdir -p rviz_satellite_ws/src && cd rviz_satellite_ws/src
+git clone https://github.com/Roboauto/rviz_satellite.git && cd rviz_satellite && git checkout MQTT_support && git submodule init && git submodule update
+cd ../..
+catkin_make_isolated --cmake-args -DCMAKE_BUILD_TYPE=Release
+source devel_isolated/setup.bash
+```
+
+If you launch RViz afterwards, you'll be able to add the 'AerialMapDisplay' visualization. The setup.bash needs to be sourced in each separate session (eg. new term window).
+
 # rviz_satellite
 
 Plugin for rviz for displaying satellite maps loaded from the internet.
