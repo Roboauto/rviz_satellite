@@ -12,6 +12,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
+#include <cmath>
 #include <unordered_map>
 #include <QtGlobal>
 #include <QImage>
@@ -41,6 +42,7 @@ limitations under the License. */
 
 #include "aerialmap_display.h"
 #include "General.h"
+#include <msgpack/v2/unpack.hpp>
 
 int constexpr FRAME_CONVENTION_XYZ_ENU = 0;  //  X -> East, Y -> North
 int constexpr FRAME_CONVENTION_XYZ_NED = 1;  //  X -> North, Y -> East
@@ -48,10 +50,27 @@ int constexpr FRAME_CONVENTION_XYZ_NWU = 2;  //  X -> North, Y -> West
 
 namespace rviz
 {
-AerialMapDisplay::AerialMapDisplay() : Display(), dirty_(false), received_msg_(false)
+
+//roots of the client
+static const std::string k_marker_client_root = "rviz_gps_marker_client_";
+
+int AerialMapDisplay::MQTT_ID = 0;
+
+bool AerialMapDisplay::invalidMqttDataHandler(const std::string & error){
+  //todo: mark error in property
+  setStatus(StatusProperty::Error, "MQTT Data:", QString::fromStdString(error));
+  return true;
+}
+			
+
+AerialMapDisplay::AerialMapDisplay() : Display(), dirty_(false), received_msg_(false), server_settings_("127.0.0.1", MQTT::k_std_mqtt_port, MQTT::QOS::AT_LEAST_ONCE)
 {
+  subscriber_ = new MQTT::MQTTSubscriber<MQTTVisualizationMessages::MarkerMsg>(k_marker_client_root + std::to_string(MQTT_ID++), server_settings_, "", std::bind(&AerialMapDisplay::incomingMqttMessage, this, std::placeholders::_1));
+  subscriber_->setErrorHandler(std::bind(&AerialMapDisplay::invalidMqttDataHandler, this, std::placeholders::_1));
+  broker_address_property_ = new StringProperty("MQTT Broker Address", "127.0.0.1", "IP address of the broker used for communication over the MQTT", this, SLOT(updateBrokerAddress()));
+
   topic_property_ =
-      new RosTopicProperty("Topic", "", QString::fromStdString(ros::message_traits::datatype<sensor_msgs::NavSatFix>()),
+      new RosTopicProperty("Topic", "/gps", QString::fromStdString(ros::message_traits::datatype<sensor_msgs::NavSatFix>()),
                            "sensor_msgs::NavSatFix topic to subscribe to.", this, SLOT(updateTopic()));
 
   alpha_property_ =
@@ -73,13 +92,16 @@ AerialMapDisplay::AerialMapDisplay() : Display(), dirty_(false), received_msg_(f
   resolution_property_->setReadOnly(true);
 
   // properties for map
+  // WikiMaps: https://maps.wikimedia.org/osm-intl/{z}/{x}/{y}.png
+  // Google Maps (lyrs can be y/s/t/m for hybrid/satellite/train/map tiles): http://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}
+  // OpenStreetMap: https://tile.openstreetmap.org/{z}/{x}/{y}.png
   tile_url_property_ =
-      new StringProperty("Object URI", "", "URL from which to retrieve map tiles.", this, SLOT(updateTileUrl()));
+      new StringProperty("Object URI", "http://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", "URL from which to retrieve map tiles.", this, SLOT(updateTileUrl()));
   tile_url_property_->setShouldBeSaved(true);
   tile_url_ = tile_url_property_->getStdString();
 
   QString const zoom_desc = QString::fromStdString("Zoom level (0 - " + std::to_string(maxZoom) + ")");
-  zoom_property_ = new IntProperty("Zoom", 16, zoom_desc, this, SLOT(updateZoom()));
+  zoom_property_ = new IntProperty("Zoom", 18, zoom_desc, this, SLOT(updateZoom()));
   zoom_property_->setShouldBeSaved(true);
   zoom_property_->setMin(0);
   zoom_property_->setMax(maxZoom);
@@ -108,6 +130,65 @@ AerialMapDisplay::~AerialMapDisplay()
   clear();
 }
 
+void AerialMapDisplay::updateBrokerAddress(){
+  //todo update
+
+  subscriber_->unsubscribe();
+  subscriber_->disconnect();
+
+  //update server settings
+  server_settings_.host = broker_address_property_->getStdString();
+
+  //create new subscribers
+  delete subscriber_;
+  subscriber_ = new MQTT::MQTTSubscriber<MQTTVisualizationMessages::MarkerMsg>("rviz_marker_" + std::to_string(MQTT_ID++), server_settings_, "", std::bind(&AerialMapDisplay::incomingMqttMessage, this, std::placeholders::_1));
+  subscriber_->setErrorHandler(std::bind(&AerialMapDisplay::invalidMqttDataHandler, this, std::placeholders::_1));
+
+  subscribe();
+}
+
+void AerialMapDisplay::incomingMqttMessage(std::shared_ptr<MQTTVisualizationMessages::MarkerMsg>& message_ptr){
+  incomingMqttMessage_(*message_ptr);
+}
+
+void AerialMapDisplay::incomingMqttMessage_(const MQTTVisualizationMessages::MarkerMsg& message){
+  /*
+  if (message.id || message.name_space != "gps" || message.action) {
+    return;
+  }
+  */
+  sensor_msgs::NavSatFix navSatFix;
+
+  navSatFix.header.seq = message.sequence_id;
+  navSatFix.header.frame_id = message.frame_id;
+  navSatFix.header.stamp = ros::Time(message.time_stamp);
+
+  // navSatFix.status = status, service ... unused
+
+  navSatFix.latitude = message.position.x;
+  navSatFix.longitude = message.position.y;
+  navSatFix.altitude = message.position.z;
+
+  // Used to determine the rotation of the vehicle, since frame transforms are unavailable
+  lastVehicleOrientation_ = {message.orientation.x, message.orientation.y, message.orientation.z, message.orientation.w};
+  lastVehicleOrientation_ = lastVehicleOrientation_* Ogre::Quaternion(Ogre::Matrix3(0, -1, 0,
+                                                                                    1, 0, 0,
+                                                                                    0, 0, 1));
+
+  /* Covariance settings, unused
+  for (int i = 0; i < 3; i++) {
+    navSatFix.position_covariance[i*3] = point.x;
+    navSatFix.position_covariance[i*3 + 1] = point.y;
+    navSatFix.position_covariance[i*3 + 2] = point.z;
+  }
+  navSatFix.position_covariance_type = marker.type;
+  */
+
+  navFixCallback(sensor_msgs::NavSatFix::ConstPtr(new sensor_msgs::NavSatFix(navSatFix)));
+
+  setStatus(StatusProperty::Ok, "MQTT Data:", "Ok");
+}
+
 void AerialMapDisplay::onEnable()
 {
   lastFixedFrame_ = context_->getFrameManager()->getFixedFrame();
@@ -134,6 +215,7 @@ void AerialMapDisplay::subscribe()
     {
       ROS_INFO("Subscribing to %s", topic_property_->getTopicStd().c_str());
       coord_sub_ = update_nh_.subscribe(topic_property_->getTopicStd(), 1, &AerialMapDisplay::navFixCallback, this);
+      subscriber_->subscribe(topic_property_->getTopicStd());
 
       setStatus(StatusProperty::Ok, "Topic", "OK");
     }
@@ -147,6 +229,7 @@ void AerialMapDisplay::subscribe()
 void AerialMapDisplay::unsubscribe()
 {
   coord_sub_.shutdown();
+  subscriber_->unsubscribe();
   ROS_INFO("Unsubscribing.");
 }
 
@@ -485,47 +568,49 @@ void AerialMapDisplay::transformAerialMap()
   Ogre::Quaternion orientation;
   Ogre::Vector3 position;
 
-  // can mapFrame be used as a fixed frame?
-  std::string errMsg;
-  if (context_->getFrameManager()->frameHasProblems(mapFrame, ros::Time{}, errMsg) ||
-      context_->getFrameManager()->transformHasProblems(mapFrame, ros::Time{}, errMsg))
-  {
-    context_->getFrameManager()->setFixedFrame(lastFixedFrame_);
-    setStatus(StatusProperty::Error, "Transform", QString::fromStdString(errMsg));
-    return;
-  }
-
-  // Set the pseudo fixed frame to map so that we can align the tiles to north just by setting identity as the
-  // orientation
-  context_->getFrameManager()->setFixedFrame(mapFrame);
-
-  // Get the latest transform between the robot frame and fixed frame from the FrameManager
-  if (!context_->getFrameManager()->getTransform(frame, ros::Time(), position, orientation))
-  {
-    // display error
-    std::string error;
-    if (context_->getFrameManager()->transformHasProblems(frame, ros::Time(), error))
-    {
-      setStatus(StatusProperty::Error, "Transform", QString::fromStdString(error));
+  if(!frame.empty()) {
+    // can mapFrame be used as a fixed frame?
+    std::string errMsg;
+    if (context_->getFrameManager()->frameHasProblems(mapFrame, ros::Time{}, errMsg) ||
+      context_->getFrameManager()->transformHasProblems(mapFrame, ros::Time{}, errMsg)) {
+      context_->getFrameManager()->setFixedFrame(lastFixedFrame_);
+      setStatus(StatusProperty::Error, "Transform", QString::fromStdString(errMsg));
+      return;
     }
-    else
-    {
-      setStatus(StatusProperty::Error, "Transform",
-                "Could not transform from [" + QString::fromStdString(frame) + "] to Fixed Frame [" + fixed_frame_ +
-                    "] for an unknown reason");
+
+    // Set the pseudo fixed frame to map so that we can align the tiles to north just by setting identity as the
+    // orientation
+    context_->getFrameManager()->setFixedFrame(mapFrame);
+
+    // Get the latest transform between the robot frame and fixed frame from the FrameManager
+    if (!context_->getFrameManager()->getTransform(frame, ros::Time(), position, orientation)) {
+      // display error
+      std::string error;
+      if (context_->getFrameManager()->transformHasProblems(frame, ros::Time(), error)) {
+        setStatus(StatusProperty::Error, "Transform", QString::fromStdString(error));
+      } else {
+        setStatus(StatusProperty::Error, "Transform",
+                  "Could not transform from [" + QString::fromStdString(frame) + "] to Fixed Frame [" +
+                  fixed_frame_ + "] for an unknown reason");
+      }
+      return;
     }
-    return;
-  }
 
-  if (position.isNaN())
-  {
-    // This can occur if an invalid TF is published.
-    // Show an error and don't apply anything, so OGRE does not throw an assertion.
-    setStatus(StatusProperty::Error, "Transform", "Received invalid transform");
-    return;
-  }
+    if (position.isNaN())
+    {
+      // This can occur if an invalid TF is published.
+      // Show an error and don't apply anything, so OGRE does not throw an assertion.
+      setStatus(StatusProperty::Error, "Transform", "Received invalid transform");
+      return;
+    }
 
-  setStatus(StatusProperty::Ok, "Transform", "Transform OK");
+    setStatus(StatusProperty::Ok, "Transform", "Transform OK");
+  } else {
+    position = {0,0,0};
+    orientation = lastVehicleOrientation_;
+
+    setStatus(StatusProperty::Ok, "Transform", "Frameless Transform was applied");
+  }
 
   // apply transform and add offset from origin
   // decimal places are needed here to calculate the offset
@@ -533,38 +618,50 @@ void AerialMapDisplay::transformAerialMap()
   auto const originOffsetX = center.x - std::floor(center.x);
   auto const originOffsetY = 1 - center.y + std::floor(center.y);  // y coord is flipped
   double const tile_w_h_m = getTileWH();
-  position.x -= originOffsetX * tile_w_h_m;
-  position.y -= originOffsetY * tile_w_h_m;
-  scene_node_->setPosition(position);
+  position.x += originOffsetX * tile_w_h_m;
+  position.y += originOffsetY * tile_w_h_m;
 
-  int const convention = frame_convention_property_->getOptionInt();
-  if (convention == FRAME_CONVENTION_XYZ_ENU)
-  {
-    // ENU corresponds to our default drawing method
-    scene_node_->setOrientation(Ogre::Quaternion::IDENTITY);
-  }
-  else if (convention == FRAME_CONVENTION_XYZ_NED)
-  {
-    // XYZ->NED will cause the map to appear reversed when viewed from above (from +z).
-    // clang-format off
-		Ogre::Matrix3 const xyz_R_ned(0, 1, 0,
-		                              1, 0, 0,
-		                              0, 0, -1);
-    // clang-format on
-    scene_node_->setOrientation(xyz_R_ned.Transpose());
-  }
-  else if (convention == FRAME_CONVENTION_XYZ_NWU)
-  {
-    // clang-format off
-		Ogre::Matrix3 const xyz_R_nwu(0, -1, 0,
-		                              1, 0, 0,
-		                              0, 0, 1);
-    // clang-format on
-    scene_node_->setOrientation(xyz_R_nwu.Transpose());
-  }
-  else
-  {
-    ROS_ERROR_STREAM("Invalid convention code: " << convention);
+  if (frame.empty()) {
+    double dist = std::sqrt(position.x * position.x + position.y * position.y);
+    double angle = std::asin(position.y / dist);
+    // Perhaps the roll is necessary to use instead of yaw because of the wrong used convention? Or just different Quats
+    // Also, zero roll is heading to the west, so we turn it to the north
+    double roll = orientation.getRoll().valueRadians();
+    angle -= (roll < 0.0 ? -1 : 1) * (M_PI - std::abs(roll));
+    if (std::abs(angle) > M_PI) {
+      angle += (angle > 0 ? -2 : 2) * M_PI;
+    }
+
+    position.x = cos(angle) * dist;
+    position.y = sin(angle) * dist;
+
+    scene_node_->setPosition(position);
+    scene_node_->setOrientation(orientation);
+  } else {
+    scene_node_->setPosition(position);
+
+    int const convention = frame_convention_property_->getOptionInt();
+    if (convention == FRAME_CONVENTION_XYZ_ENU) {
+      // ENU corresponds to our default drawing method
+      scene_node_->setOrientation(orientation);
+    } else if (convention == FRAME_CONVENTION_XYZ_NED) {
+      // XYZ->NED will cause the map to appear reversed when viewed from above (from +z).
+      // clang-format off
+      Ogre::Matrix3 const xyz_R_ned(0, 1, 0,
+                                    1, 0, 0,
+                                    0, 0, -1);
+      // clang-format on
+      scene_node_->setOrientation(xyz_R_ned.Transpose());
+    } else if (convention == FRAME_CONVENTION_XYZ_NWU) {
+      // clang-format off
+      Ogre::Matrix3 const xyz_R_nwu(0, -1, 0,
+                                    1, 0, 0,
+                                    0, 0, 1);
+      // clang-format on
+      scene_node_->setOrientation(xyz_R_nwu.Transpose());
+    } else {
+      ROS_ERROR_STREAM("Invalid convention code: " << convention);
+    }
   }
 }
 

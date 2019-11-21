@@ -23,6 +23,7 @@ limitations under the License. */
 
 #include <OGRE/OgreTexture.h>
 #include <OGRE/OgreMaterial.h>
+#include <OGRE/OgreQuaternion.h>
 #endif  //  Q_MOC_RUN
 
 #include <QObject>
@@ -39,6 +40,9 @@ limitations under the License. */
 #include <memory>
 #include "TileCacheDelay.h"
 #include "OgreTile.h"
+
+#include "MQTT.h"
+#include "MQTTVisualizationMessages/include/MQTTVisualizationMessages/MarkerMessage.h"
 
 namespace Ogre
 {
@@ -172,6 +176,9 @@ protected:
   boost::optional<TileId> lastTileId_;
   std::string lastFixedFrame_;
 
+  StringProperty* broker_address_property_;
+  Ogre::Quaternion lastVehicleOrientation_;
+
   /**
    * Calculate the tile width/ height in meter
    */
@@ -185,6 +192,19 @@ protected:
     double const tile_w_h_m = tile_w_h_px * resolution;
     return tile_w_h_m;
   }
-};
 
+private Q_SLOTS:
+  void updateBrokerAddress();
+
+private:
+  void incomingMqttMessage(std::shared_ptr<MQTTVisualizationMessages::MarkerMsg>& message_ptr);
+
+  void incomingMqttMessage_(const MQTTVisualizationMessages::MarkerMsg& message);
+  bool invalidMqttDataHandler(const std::string& name);
+
+  MQTT::MQTTServerSettings server_settings_;
+  MQTT::MQTTSubscriber<MQTTVisualizationMessages::MarkerMsg>* subscriber_;
+
+  static int MQTT_ID;
+};
 }  // namespace rviz

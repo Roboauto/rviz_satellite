@@ -32,15 +32,11 @@ namespace detail
  */
 struct ExpiringArea
 {
-  QTimer timer;
+  std::chrono::steady_clock::time_point startTime{std::chrono::steady_clock::now()};
   Area area;
+  std::chrono::milliseconds timeout{2000};
 
-  ExpiringArea(Area area) : area(std::move(area))
-  {
-    timer.setSingleShot(true);
-    int constexpr timeout = 2000;  // in ms
-    timer.start(timeout);
-  }
+  ExpiringArea(Area area) : area(std::move(area)){}
 
   ExpiringArea(ExpiringArea&&) = default;
   ExpiringArea(ExpiringArea const& p) : area(p.area)
@@ -56,27 +52,17 @@ struct ExpiringArea
   template <typename Tile>
   bool ready(TileCacheDelay<Tile> const& cache) const
   {
-    if (!timer.isActive())
+    if (cache.isAreaReady(area))
     {
       return true;
     }
 
-    return cache.isAreaReady(area);
+    return startTime + timeout <= std::chrono::steady_clock::now();
   }
 
   ExpiringArea& operator=(ExpiringArea&&) = default;
 
-  ExpiringArea& operator=(ExpiringArea const& p)
-  {
-    area = p.area;
-
-    // QTimer has no copy operator
-    if (p.timer.isActive())
-    {
-      timer.start(p.timer.remainingTime());
-    }
-    return *this;
-  }
+  ExpiringArea& operator=(ExpiringArea const& p) = default;
 };
 
 /**

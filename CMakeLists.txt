@@ -1,5 +1,19 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(rviz_satellite)
+add_compile_options(-std=c++11)
+
+###
+if(NOT EXISTS "${CMAKE_BINARY_DIR}/conan.cmake")
+   message(STATUS "Downloading conan.cmake from https://github.com/conan-io/cmake-conan")
+   file(DOWNLOAD "https://raw.githubusercontent.com/conan-io/cmake-conan/v0.13/conan.cmake"
+                 "${CMAKE_BINARY_DIR}/conan.cmake")
+endif()
+include(${CMAKE_BINARY_DIR}/conan.cmake)
+conan_cmake_run(CONANFILE conanfile.txt
+   BUILD missing)
+
+set(CMAKE_MODULE_PATH ${CMAKE_BINARY_DIR} ${CMAKE_MODULE_PATH})
+###
 
 find_package(PkgConfig REQUIRED)
 
@@ -19,6 +33,9 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
 )
 
+find_package(msgpack REQUIRED)
+find_package(mosquitto REQUIRED)
+
 catkin_package(CATKIN_DEPENDS nav_msgs sensor_msgs)
 
 if (rviz_QT_VERSION VERSION_LESS "5")
@@ -27,6 +44,8 @@ if (rviz_QT_VERSION VERSION_LESS "5")
 else()
 	find_package(Qt5 COMPONENTS Core Gui Network Concurrent REQUIRED)
 endif()
+
+####################
 
 set(${PROJECT_NAME}_SOURCES
   src/aerialmap_display.cpp
@@ -84,8 +103,20 @@ set(PROJECT_SOURCE_FILES
   ${${PROJECT_NAME}_MOCSrcs}
 )
 
-add_library(${PROJECT_NAME}
-  ${PROJECT_SOURCE_FILES}
+add_library(${PROJECT_NAME})
+target_sources(${PROJECT_NAME} PRIVATE
+  src/aerialmap_display.cpp
+  src/OgreTile.cpp
+  src/TileId.cpp
+  ${${PROJECT_NAME}_MOCSrcs}
+)
+target_include_directories(${PROJECT_NAME} PUBLIC
+  src
+  src/detail
+)
+target_link_libraries(${PROJECT_NAME} PRIVATE
+  msgpack::msgpack
+  mosquitto::mosquitto
 )
 
 install(TARGETS ${PROJECT_NAME}

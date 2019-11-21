@@ -47,6 +47,7 @@ public:
   TileDownloader(decltype(callback) callback) : manager(new QNetworkAccessManager(this)), callback(std::move(callback))
   {
     connect(manager, SIGNAL(finished(QNetworkReply*)), SLOT(downloadFinished(QNetworkReply*)));
+    connect(this, SIGNAL(requestTile(QNetworkRequest)), SLOT(getTile(QNetworkRequest)));
 
     QNetworkDiskCache* diskCache = new QNetworkDiskCache(this);
     QString const cachePath =
@@ -73,7 +74,7 @@ public:
     QVariant variant;
     variant.setValue(tileId);
     request.setAttribute(QNetworkRequest::User, variant);
-    manager->get(request);
+    emit(requestTile(request));
   }
 
 public slots:
@@ -105,6 +106,14 @@ public slots:
 
     reply->deleteLater();
   }
+
+signals:
+    void requestTile(QNetworkRequest request);
+
+private slots:
+    void getTile(QNetworkRequest request){
+      manager->get(request);
+  };
 };
 
 }  // namespace detail
