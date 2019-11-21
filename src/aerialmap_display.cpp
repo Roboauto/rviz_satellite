@@ -171,6 +171,7 @@ void AerialMapDisplay::incomingMqttMessage_(const MQTTVisualizationMessages::Mar
 
   // Used to determine the rotation of the vehicle, since frame transforms are unavailable
   lastVehicleOrientation_ = {message.orientation.x, message.orientation.y, message.orientation.z, message.orientation.w};
+  // Also, fix rotation
   lastVehicleOrientation_ = lastVehicleOrientation_* Ogre::Quaternion(Ogre::Matrix3(0, -1, 0,
                                                                                     1, 0, 0,
                                                                                     0, 0, 1));
@@ -625,7 +626,6 @@ void AerialMapDisplay::transformAerialMap()
     double dist = std::sqrt(position.x * position.x + position.y * position.y);
     double angle = std::asin(position.y / dist);
     // Perhaps the roll is necessary to use instead of yaw because of the wrong used convention? Or just different Quats
-    // Also, zero roll is heading to the west, so we turn it to the north
     double roll = orientation.getRoll().valueRadians();
     angle -= (roll < 0.0 ? -1 : 1) * (M_PI - std::abs(roll));
     if (std::abs(angle) > M_PI) {
@@ -643,7 +643,7 @@ void AerialMapDisplay::transformAerialMap()
     int const convention = frame_convention_property_->getOptionInt();
     if (convention == FRAME_CONVENTION_XYZ_ENU) {
       // ENU corresponds to our default drawing method
-      scene_node_->setOrientation(orientation);
+      scene_node_->setOrientation(Ogre::Quaternion::IDENTITY);
     } else if (convention == FRAME_CONVENTION_XYZ_NED) {
       // XYZ->NED will cause the map to appear reversed when viewed from above (from +z).
       // clang-format off
