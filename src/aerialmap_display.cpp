@@ -96,7 +96,7 @@ AerialMapDisplay::AerialMapDisplay() : Display(), dirty_(false), received_msg_(f
   // Google Maps (lyrs can be y/s/t/m for hybrid/satellite/train/map tiles): http://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}
   // OpenStreetMap: https://tile.openstreetmap.org/{z}/{x}/{y}.png
   tile_url_property_ =
-      new StringProperty("Object URI", "http://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}", "URL from which to retrieve map tiles.", this, SLOT(updateTileUrl()));
+      new StringProperty("Object URI", "https://mapserver.mapy.cz/bing/{z}-{x}-{y}", "URL from which to retrieve map tiles.", this, SLOT(updateTileUrl()));
   tile_url_property_->setShouldBeSaved(true);
   tile_url_ = tile_url_property_->getStdString();
 
@@ -171,9 +171,9 @@ void AerialMapDisplay::incomingMqttMessage_(const MQTTVisualizationMessages::Mar
 
   // Used to determine the rotation of the vehicle, since frame transforms are unavailable
   lastVehicleOrientation_ = {message.orientation.x, message.orientation.y, message.orientation.z, message.orientation.w};
-  // Also, fix rotation
-  lastVehicleOrientation_ = lastVehicleOrientation_* Ogre::Quaternion(Ogre::Matrix3(0, -1, 0,
-                                                                                    1, 0, 0,
+  // Also, fix rotation - obtained RPY isn't null even if the orientation is constructed with params 0,0,0,1; yaw is always rotated by pi
+  lastVehicleOrientation_ = lastVehicleOrientation_* Ogre::Quaternion(Ogre::Matrix3(-1, 0, 0,
+                                                                                    0, -1, 0,
                                                                                     0, 0, 1));
 
   /* Covariance settings, unused
